@@ -1,294 +1,214 @@
-
 <?php
-declare(strict_types=1);
-
 require_once __DIR__ . '/includes/functions.php';
 
-$id = cleanInput($_GET['id'] ?? '');
-$product = getProductById($id);
+$productId = cleanInput($_GET['id'] ?? '');
+$product = getProductById($productId);
 
 if (!$product || empty($product['active'])) {
     http_response_code(404);
-    $pageTitle = 'Product Not Found | VYRO';
-    require_once __DIR__ . '/includes/header.php';
-    ?>
-    <section class="empty-state section-padding">
-        <div class="container">
-            <h1>المنتج غير موجود</h1>
-            <p>يبدو أن هذا المنتج لم يعد متاحاً.</p>
-            <a href="shop.php" class="btn btn-primary">العودة إلى المتجر</a>
-        </div>
-    </section>
-    <?php
-    require_once __DIR__ . '/includes/footer.php';
-    exit;
+    if (is_file(__DIR__ . '/404.php')) {
+        require_once __DIR__ . '/404.php';
+        exit;
+    }
+    exit('المنتج غير موجود.');
 }
 
-$pageTitle = ($product['name'] ?? 'Product') . ' | VYRO';
+// معالجة الإضافة إلى السلة عند إرسال النموذج
+if (isPost() && ($_POST['action'] ?? '') === 'add_to_cart') {
+    requireValidCsrf();
 
-$sizes = $product['sizes'] ?? [];
+    $selectedSize = cleanInput($_POST['size'] ?? '');
+    $quantity = max(1, (int) ($_POST['quantity'] ?? 1));
+    $availableSizes = is_array($product['sizes'] ?? null) ? $product['sizes'] : [];
+
+    if (!empty($availableSizes) && $selectedSize === '') {
+        setFlashMessage('error', 'يرجى اختيار المقاس المناسب قبل الإضافة إلى السلة.');
+    } elseif ((int) ($product['stock'] ?? 0) <= 0) {
+        setFlashMessage('error', 'عذراً، هذا المنتج غير متوفر حالياً في المخزون.');
+    } else {
+        if (addToCart((string) $product['id'], $selectedSize, $quantity)) {
+            setFlashMessage('success', 'تمت إضافة المنتج إلى سلة التسوق بنجاح.');
+            redirect('cart.php');
+        } else {
+            setFlashMessage('error', 'تعذرت إضافة المنتج إلى السلة، يرجى المحاولة مرة أخرى.');
+        }
+    }
+}
+
+$pageTitle = ($product['name'] ?? 'تفاصيل المنتج') . ' | VYRO®';
+$pageDescription = $product['description'] ?? 'اكتشف مواصفات ومقاسات ' . ($product['name'] ?? 'المنتج');
+
+$sizes = is_array($product['sizes'] ?? null) && !empty($product['sizes'])
+    ? $product['sizes']
+    : ['40', '41', '42', '43', '44', '45'];
+
+$stock = (int) ($product['stock'] ?? 0);
 $price = getProductPrice($product);
-$oldPrice = (float)($product['price'] ?? 0);
-$stock = max(0, (int)($product['stock'] ?? 0));
+$hasSale = !empty($product['sale_price']) && (float) $product['sale_price'] < (float) ($product['price'] ?? 0);
 
-$relatedProducts = array_filter(
-    getProducts(),
-    fn($item) =>
-        ($item['id'] ?? '') !== $id &&
-        !empty($item['active']) &&
-        ($item['category'] ?? '') === ($product['category'] ?? '')
+// منتجات ذات صلة
+$relatedProducts = array_values(
+    array_filter(
+        getProducts(),
+        fn($p) => !empty($p['active']) && (string) ($p['id'] ?? '') !== (string) $product['id']
+    )
 );
-
-$relatedProducts = array_slice(array_values($relatedProducts), 0, 4);
+$relatedProducts = array_slice($relatedProducts, 0, 4);
 
 require_once __DIR__ . '/includes/header.php';
 ?>
 
-<section class="product-page section-padding">
-
+<section class="product-detail-page section-padding">
     <div class="container">
 
-        <div class="product-layout">
+        <nav class="breadcrumb">
+            <a href="index.php">الرئيسية</a>
+            <span>/</span>
+            <a href="shop.php">المتجر</a>
+            <span>/</span>
+            <span><?= e($product['name'] ?? '') ?></span>
+        </nav>
 
-            <div class="product-gallery reveal">
+        <div class="product-detail-grid">
+            <!-- صورة المنتج -->
+            <div class="product-detail-media">
+                <?php if ($hasSale): ?>
+                    <span class="product-badge sale-badge">SALE</span>
+                <?php elseif (isProductNew($product)): ?>
+                    <span class="product-badge">NEW</span>
+                <?php endif; ?>
 
-                <div class="product-main-image">
-
-                    <img
-                        src="<?= e($product['image'] ?? '') ?>"
-                        alt="<?= e($product['name'] ?? 'VYRO Shoe') ?>"
-                        id="mainProductImage"
-                    >
-
-                    <?php if (!empty($product['sale_price'])): ?>
-                        <span class="product-badge">SALE</span>
-                    <?php endif; ?>
-
-                </div>
-
+                <img
+                    src="<?= e($product['image'] ?? '') ?>"
+                    alt="<?= e($product['name'] ?? '') ?>"
+                >
             </div>
 
-
-            <div class="product-details reveal">
-
-                <span class="eyebrow">
-                    <?= e(strtoupper($product['category'] ?? 'VYRO COLLECTION')) ?>
-                </span>
-
+            <!-- تفاصيل المنتج وخيارات الشراء -->
+            <div class="product-detail-info">
+                <span class="eyebrow"><?= e(strtoupper($product['category'] ?? 'VYRO COLLECTION')) ?></span>
                 <h1><?= e($product['name'] ?? '') ?></h1>
 
-                <p class="product-description">
-                    <?= e($product['description'] ?? 'Designed for movement. Built for everyday performance.') ?>
+                <div class="product-detail-price">
+                    <strong><?= e(formatPrice($price)) ?></strong>
+                    <?php if ($hasSale): ?>
+                        <del><?= e(formatPrice($product['price'])) ?></del>
+                    <?php endif; ?>
+                </div>
+
+                <p class="product-detail-desc">
+                    <?= e($product['description'] ?? 'حذاء رياضي عصري مصمم ليمنحك أقصى درجات الراحة والثبات في كل خطوة.') ?>
                 </p>
 
-
-                <div class="product-detail-price">
-
-                    <strong><?= e(formatPrice($price)) ?></strong>
-
-                    <?php if ($price < $oldPrice): ?>
-                        <del><?= e(formatPrice($oldPrice)) ?></del>
-                        <span class="sale-label">عرض خاص</span>
-                    <?php endif; ?>
-
+                <div class="stock-status <?= $stock > 0 ? 'in-stock' : 'out-of-stock' ?>">
+                    <?= $stock > 0 ? '● متوفر في المخزون (' . $stock . ' قطعة)' : '● نفدت الكمية حالياً' ?>
                 </div>
 
+                <?php if ($stock > 0): ?>
+                    <form method="POST" action="product.php?id=<?= e($product['id']) ?>" class="add-to-cart-form">
+                        <?= csrfField() ?>
+                        <input type="hidden" name="action" value="add_to_cart">
 
-                <div class="product-stock">
-
-                    <?php if ($stock > 0): ?>
-
-                        <span class="stock-dot"></span>
-                        متوفر حالياً
-
-                    <?php else: ?>
-
-                        <span class="stock-dot out-of-stock"></span>
-                        غير متوفر حالياً
-
-                    <?php endif; ?>
-
-                </div>
-
-
-                <form action="cart.php" method="POST" class="product-form">
-
-                    <input type="hidden" name="csrf_token" value="<?= e(csrfToken()) ?>">
-                    <input type="hidden" name="action" value="add">
-                    <input type="hidden" name="product_id" value="<?= e($product['id']) ?>">
-
-                    <div class="size-selector">
-
-                        <div class="size-heading">
-                            <label>اختر المقاس</label>
-                            <span>EU SIZE</span>
+                        <!-- اختيار المقاس -->
+                        <div class="size-selector-group">
+                            <label>اختر المقاس (EU):</label>
+                            <div class="size-options">
+                                <?php foreach ($sizes as $index => $size): ?>
+                                    <label class="size-pill">
+                                        <input
+                                            type="radio"
+                                            name="size"
+                                            value="<?= e((string) $size) ?>"
+                                            <?= $index === 0 ? 'checked' : '' ?>
+                                            required
+                                        >
+                                        <span><?= e((string) $size) ?></span>
+                                    </label>
+                                <?php endforeach; ?>
+                            </div>
                         </div>
 
-                        <div class="size-options">
+                        <!-- اختيار الكمية وزر الإضافة -->
+                        <div class="purchase-actions">
+                            <div class="qty-box">
+                                <label for="quantity">الكمية:</label>
+                                <input
+                                    type="number"
+                                    id="quantity"
+                                    name="quantity"
+                                    value="1"
+                                    min="1"
+                                    max="<?= min($stock, VYRO_MAX_QUANTITY) ?>"
+                                >
+                            </div>
 
-                            <?php foreach ($sizes as $size): ?>
+                            <button type="submit" class="btn btn-primary add-cart-submit">
+                                أضف إلى السلة <span>←</span>
+                            </button>
 
-                                <label class="size-option">
+                            <button
+                                type="button"
+                                class="favorite-btn detail-fav-btn <?= isFavorite((string) $product['id']) ? 'is-favorite' : '' ?>"
+                                data-favorite="<?= e((string) $product['id']) ?>"
+                                aria-label="إضافة للمفضلة"
+                                title="المفضلة"
+                            >♡</button>
+                        </div>
+                    </form>
+                <?php endif; ?>
 
-                                    <input
-                                        type="radio"
-                                        name="size"
-                                        value="<?= e((string)$size) ?>"
-                                        required
+                <div class="product-perks">
+                    <div>✓ شحن سريع لجميع المناطق</div>
+                    <div>✓ الدفع نقداً عند الاستلام</div>
+                    <div>✓ إمكانية الاستبدال خلال 7 أيام</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- منتجات قد تعجبك -->
+        <?php if (!empty($relatedProducts)): ?>
+            <div class="related-products-section">
+                <div class="section-heading">
+                    <div>
+                        <span class="section-eyebrow">YOU MAY ALSO LIKE</span>
+                        <h2>منتجات <span>مشابهة</span></h2>
+                    </div>
+                </div>
+
+                <div class="products-grid">
+                    <?php foreach ($relatedProducts as $rel): ?>
+                        <article class="product-card">
+                            <div class="product-image-wrap">
+                                <a href="product.php?id=<?= e($rel['id']) ?>">
+                                    <img
+                                        src="<?= e($rel['image'] ?? '') ?>"
+                                        alt="<?= e($rel['name'] ?? '') ?>"
+                                        loading="lazy"
                                     >
-
-                                    <span><?= e((string)$size) ?></span>
-
-                                </label>
-
-                            <?php endforeach; ?>
-
-                        </div>
-
-                    </div>
-
-
-                    <div class="quantity-selector">
-
-                        <label for="quantity">الكمية</label>
-
-                        <input
-                            type="number"
-                            id="quantity"
-                            name="quantity"
-                            value="1"
-                            min="1"
-                            max="<?= min(VYRO_MAX_QUANTITY, $stock) ?>"
-                            required
-                        >
-
-                    </div>
-
-
-                    <button
-                        type="submit"
-                        class="btn btn-primary add-to-cart-btn"
-                        <?= $stock <= 0 ? 'disabled' : '' ?>
-                    >
-                        <?= $stock > 0 ? 'أضف إلى السلة' : 'غير متوفر' ?>
-                    </button>
-
-                </form>
-
-
-                <div class="product-benefits">
-
-                    <div>
-                        <span>↗</span>
-                        <p>تصميم يجمع الأداء والأناقة</p>
-                    </div>
-
-                    <div>
-                        <span>✓</span>
-                        <p>جودة مختارة بعناية</p>
-                    </div>
-
-                    <div>
-                        <span>◇</span>
-                        <p>تجربة تسوق سهلة وآمنة</p>
-                    </div>
-
+                                </a>
+                                <a href="product.php?id=<?= e($rel['id']) ?>" class="quick-view-btn">
+                                    <span>عرض التفاصيل والمقاسات</span>
+                                    <span>←</span>
+                                </a>
+                            </div>
+                            <div class="product-info">
+                                <div class="product-category"><?= e(strtoupper($rel['category'] ?? 'VYRO')) ?></div>
+                                <h3>
+                                    <a href="product.php?id=<?= e($rel['id']) ?>">
+                                        <?= e($rel['name'] ?? '') ?>
+                                    </a>
+                                </h3>
+                                <div class="product-price">
+                                    <strong><?= e(formatPrice(getProductPrice($rel))) ?></strong>
+                                </div>
+                            </div>
+                        </article>
+                    <?php endforeach; ?>
                 </div>
-
             </div>
-
-        </div>
+        <?php endif; ?>
 
     </div>
-
 </section>
-
-
-<?php if (!empty($relatedProducts)): ?>
-
-<section class="related-products section-padding">
-
-    <div class="container">
-
-        <div class="section-heading">
-
-            <div>
-                <span class="eyebrow">YOU MAY ALSO LIKE</span>
-                <h2>منتجات قد تعجبك</h2>
-            </div>
-
-            <a href="shop.php" class="text-link">كل المنتجات ←</a>
-
-        </div>
-
-
-        <div class="products-grid">
-
-            <?php foreach ($relatedProducts as $item): ?>
-
-                <article class="product-card reveal">
-
-                    <div class="product-image">
-
-                        <a href="product.php?id=<?= e($item['id']) ?>">
-
-                            <img
-                                src="<?= e($item['image'] ?? '') ?>"
-                                alt="<?= e($item['name'] ?? 'VYRO Shoe') ?>"
-                                loading="lazy"
-                            >
-
-                        </a>
-
-                        <button
-                            class="favorite-btn"
-                            type="button"
-                            data-favorite="<?= e($item['id']) ?>"
-                            aria-label="إضافة إلى المفضلة"
-                            aria-pressed="false"
-                        >♡</button>
-
-                    </div>
-
-                    <div class="product-info">
-
-                        <span class="product-category">
-                            <?= e(strtoupper($item['category'] ?? 'VYRO')) ?>
-                        </span>
-
-                        <h3>
-                            <a href="product.php?id=<?= e($item['id']) ?>">
-                                <?= e($item['name'] ?? '') ?>
-                            </a>
-                        </h3>
-
-                        <div class="product-price">
-
-                            <strong>
-                                <?= e(formatPrice(getProductPrice($item))) ?>
-                            </strong>
-
-                            <?php if (!empty($item['sale_price'])): ?>
-                                <del>
-                                    <?= e(formatPrice((float)$item['price'])) ?>
-                                </del>
-                            <?php endif; ?>
-
-                        </div>
-
-                    </div>
-
-                </article>
-
-            <?php endforeach; ?>
-
-        </div>
-
-    </div>
-
-</section>
-
-<?php endif; ?>
-
 
 <?php require_once __DIR__ . '/includes/footer.php'; ?>
